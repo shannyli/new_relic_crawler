@@ -3,16 +3,14 @@ from termcolor import colored
 import requests
 import json
 from pathlib import Path
-import time
 import csv
 from operator import itemgetter
 import time
 
 
 def main():
-    start = time.time()
+    # Create arg parser to load input vars
     arg_parser = argparse.ArgumentParser()
-
     arg_parser.add_argument('--apiKey',
                             action='store',
                             type=str,
@@ -34,69 +32,104 @@ def main():
                             type=str,
                             help='the location of the output files')
 
-    # Load up input vars
+    # Load arg parse vars into their own variables for ease of use
     args = arg_parser.parse_args()
     api_key = args.apiKey
     account_id = args.accountId
-    file_path = args.inputFile
-    json_path = args.jsonFile
-    output_path = args.outputFile
+    input_file_path = args.inputFile
+    tmp_file_path = args.jsonFile
+    output_file_path = args.outputFile
 
     print("\nStarting New Relic Crawler"
           "\n\tAPI KEY: " + str(api_key) +
           "\n\tACCOUNT KEY: " + str(account_id) +
-          "\n\tINPUT: " + file_path + "\n")
+          "\n\tINPUT: " + input_file_path + "\n")
 
-    lines_by_files = load_txt_files(file_path)
+    # Start timer
+    start = time.time()
 
-    #Generate Data
-    for file_lines in lines_by_files:
-        output_for_file = []
-        print(colored("\n\nName of file: " + str(file_lines), "yellow"))
-        lines = lines_by_files.get(file_lines)
-        for line in lines:
+    # Load input files
+    input_txt_files = load_txt_files(input_file_path)
+
+    # Fetch data from new relic
+    for input_text_file in input_txt_files:
+
+        json_file_contents = []
+        print(colored("\n\nFetching query data for file: " + str(input_text_file), "yellow"))
+        input_text_file_contents = input_txt_files.get(input_text_file)
+
+        for line in input_text_file_contents:
+
+            # Split | delimited line
             line_sections = line.split("|")
             header = line_sections[0]
             sub_header = line_sections[1]
             query_name = line_sections[2]
             query = line_sections[3]
             time_clause = line_sections[4]
-            query_sql_safe = query #sql_safe(query)
 
-            print("Running query: " + str(colored(query_name, "blue")) + " with sql: " + str(
-                colored(query_sql_safe, "magenta")) + " with time " + str(colored(time_clause, "yellow")))
+            print("Fetching data for..." +
+                  "\n\tQuery Name: " + str(colored(query_name, "blue")) +
+                  "\n\tSQL: " + str(colored(query, "magenta")) +
+                  "\n\tTime " + str(colored(time_clause, "yellow")))
 
+            # Execute rest call to new relic
             response = execute_rest_call(query, api_key, account_id, time_clause)
-            parsed_response = parse_response(query_name, response)
-            data_holder = {
+
+            # Parse response from new relic
+            parsed_response = parse_response(response)
+
+            # Create json data holder for temp file
+            tmp_json_container = {
                 "query_data": parsed_response,
                 "query_name": query_name,
                 "header": header,
                 "sub_header": sub_header
 
-
             }
-            output_for_file.append(data_holder)
 
-        print("\nwriting file for " + file_lines.replace(".txt", ""))
-        map_file = open("json_out/" + file_lines.replace(".txt", "") + ".json", "w")
-        map_file.write(json.dumps(output_for_file, indent=4, sort_keys=True))
+            # Add json container to json contents
+            json_file_contents.append(tmp_json_container)
+
+        print("\nWriting temp json for: " + input_text_file.replace(".txt", ""))
+        map_file = open(tmp_file_path + input_text_file.replace(".txt", "") + ".json", "w")
+        map_file.write(json.dumps(json_file_contents, indent=4, sort_keys=True))
         map_file.close()
 
-    #Parse Data
-    print("\n\nLOADING DATA FOR CSV GENERATION")
+    # Parse stored data
+    print("\nLoading temp data files")
     report_write_time = time.localtime(time.time())
-    files = load_json_files(json_path)
-    for file in files:
+    temp_json_files = load_json_files(tmp_file_path)
+    parse_temp_data_files(temp_json_files, output_file_path, report_write_time)
+
+    #Computing run time
+    end = time.time()
+    print("\n\n\nCrawler ran in : " + str(end - start))
+
+
+def parse_temp_data_files(temp_json_files, output_file_path, report_write_time):
+    # It should be noted, this method is a little manual, it can parse two payload types from new relic
+    # all other payloads return errors, see read me for more.
+    # It should also be noted, this parser creates very specific csv's which may not be reasonable for all use cases
+    for temp_json_file in temp_json_files:
+
+        # Set up csv fields and rows for csv writer
         csv_fields = ["key", "value"]
         csv_rows = []
-        data = files.get(file)
-        for entry in data:
+
+        json_file_contents = temp_json_files.get(temp_json_file)
+
+        for entry in json_file_contents:
+
+            # Pull data from stored json
             header = entry.get("header")
             sub_header = entry.get("sub_header")
             query_data = entry.get("query_data")
             query_name = entry.get("query_name")
+            response = query_data.get("response")
+            print(response)
 
+            # If a header exists, save it in a row on its own with an empty row above it
             if header:
                 tmp = []
                 csv_rows.append([])
@@ -104,8 +137,9 @@ def main():
                 csv_rows.append(tmp)
                 tmp = []
 
-            response = query_data.get("response")
+            # If response array has two entries we assume one is a "true" facet and one is a "false" facet, be sure to empty tmp
             if len(response) == 2:
+
                 first_response = response[0]
                 second_response = response[1]
 
@@ -124,91 +158,94 @@ def main():
                 percentage = false_value / (false_value + true_value)
                 short_percentage = float("{:.3f}".format(percentage))
 
+                # Store sub header and false percent to a row, be sure to empty tmp
                 tmp = []
                 tmp.append(sub_header)
                 tmp.append(short_percentage)
                 csv_rows.append(tmp)
                 tmp = []
 
-                # print(query_name + " has value of " + str(short_percentage))
-
+            # If response array has one entry it is either a score or a p90
             elif len(response) == 1:
                 data_obj = response[0]
                 keys = list(map(itemgetter(0), data_obj.items()))
+
+                # For our purposes key length should always be one, but we check it anyway
                 if len(keys) == 1:
                     response_data = data_obj.get(keys[0])
+
+                    # If response data is a dict, we assume it is a p95 form
                     if type(response_data) is dict:
                         p50 = response_data.get("50")
                         p90 = response_data.get("90")
                         p95 = response_data.get("95")
                         p99 = response_data.get("99")
-                        # print(query_name)
-                        # print("\tp50: " + str(p50))
-                        # print("\tp90: " + str(p90))
-                        # print("\tp95: " + str(p95))
-                        # print("\tp99: " + str(p99))
 
+                        # Store empty row
                         tmp = []
                         csv_rows.append(tmp)
 
+                        # Store sub header in row
                         tmp = []
                         tmp.append(sub_header)
                         csv_rows.append(tmp)
 
+                        # Store p50 row
                         tmp = []
                         tmp.append("p50")
                         tmp.append(p50)
                         csv_rows.append(tmp)
 
+                        # Store p90 row
                         tmp = []
                         tmp.append("p90")
                         tmp.append(p90)
                         csv_rows.append(tmp)
 
+                        # Store p95 row
                         tmp = []
                         tmp.append("p95")
                         tmp.append(p95)
                         csv_rows.append(tmp)
 
+                        # Store p99 row
                         tmp = []
                         tmp.append("p99")
                         tmp.append(p99)
                         csv_rows.append(tmp)
 
+                    # If response data is a int, we assume it is a score form
                     elif type(response_data) is int:
 
+                        # Store score row
                         tmp = []
                         tmp.append(sub_header)
                         tmp.append(response_data)
                         csv_rows.append(tmp)
 
-                        # print(sub_header + " has value of " + str(response_data))
-
-
-
-
                     else:
-                        print(colored("we have error with data type", "red"))
+                        print(colored("We have error with data type, this means the response_data was NOT a dict or int", "red"))
                 else:
-                    print(colored("we have error with key size", "red"))
+                    print(colored("We have error with key size, this means we had more than one key, I am unclear on when this might happen", "red"))
             else:
-                print(colored("we have error with response size", "red"))
+                print(colored("We have error with response size, this means we have more than two entries in the response array, this may be ok, just not sure how to handle", "red"))
 
-            with open(output_path + "/" + file + "_" + str(
+            # Write csv to file
+            with open(output_file_path + "/" + temp_json_file + "_" + str(
                     time.strftime("%Z_%Y-%m-%d", report_write_time)) + ".csv",
                       'w') as csvfile:
                 csvwriter = csv.writer(csvfile)
                 csvwriter.writerow(csv_fields)
                 csvwriter.writerows(csv_rows)
-    end = time.time()
-    print("\n\n\nCrawler ran in : " + str(end - start))
 
 
 def load_txt_files(test_dir):
+    # Pull every text file from input file path
     files = Path(test_dir).glob("**/*.txt")
 
     lines_by_files = {}
 
+    # Load file line by line into a list of lists
     for txt_file in files:
         with open(txt_file) as txt_file:
             lines = txt_file.readlines()
@@ -219,66 +256,67 @@ def load_txt_files(test_dir):
 
 
 def load_json_files(test_dir):
+    # Pull every json file from temp file path
     files = Path(test_dir).glob("**/*.json")
 
-    lines_by_files = {}
+    json_by_files = {}
 
-    for txt_file in files:
-        with open(txt_file) as json_file:
+    # Load file parsing as json
+    for json_file in files:
+        with open(json_file) as json_file:
             data = json.load(json_file)
-            lines_by_files[txt_file.name.split("/")[(len(txt_file.name.split("/")) - 1)]] = data
+            json_by_files[json_file.name.split("/")[(len(json_file.name.split("/")) - 1)]] = data
 
-    return lines_by_files
-
-
-def sql_safe(query):
-    query_strings = query.split(" ")
-    for idx, val in enumerate(query_strings):
-        if "-" in val:
-            val = "`" + val + "`"
-            query_strings[idx] = val
-
-    return ' '.join(query_strings)
+    return json_by_files
 
 
 def execute_rest_call(query, api, account, time_clause):
+    # Base url for gql endpoint
     url = "https://api.newrelic.com/graphql"
+
+    # Payload expects a gql string, except we are passing in sql into a gql object
+    # Here we replace ACCOUNT with the account id, QUERY with the sql query and TIME with the time clause
     query_payload_string = "{actor {account(id: ACCOUNT) {nrql(query: \" QUERY TIME\") {results}}}}"
     query_payload_string = query_payload_string.replace("ACCOUNT", account)
     query_payload_string = query_payload_string.replace("QUERY", query)
     query_payload_string = query_payload_string.replace("TIME", time_clause)
 
+    # Put query string inside standard json payload
     payload = {
         "query": query_payload_string
     }
 
+    # Define headers
     headers = {
         "Accept": "application/json",
         "Content-Type": "application/json",
         "API-key": api
     }
+
+    #Execute rest call
     response = requests.post(url, data=json.dumps(payload), headers=headers)
     return response
 
 
-def parse_response(query_name, response):
+def parse_response(response):
     response_code = response.status_code
     response_data = {}
+
     if response_code == 200:
-        print(colored("\tNew relic response success", "green"))
+        print(colored("\t\tNew relic request returned", "yellow"))
 
         try:
             data = response.json()
             results = data.get("data").get("actor").get("account").get("nrql").get("results")
             response_data["response"] = results
-            # print(json.dumps(results, sort_keys=False, indent=2))
+            print(colored("\t\t\tNew relic rest call parsed", "green"))
         except:
-            print(colored("\t\tNew relic response failed to parse", "red"))
+            print(colored("\t\t\tNew relic response failed to parse", "red"))
             print(json.dumps(response.json(), sort_keys=False, indent=2))
             response_data["response"] = response.json()
 
     else:
-        print(colored("\tNew relic response failed: " + str(response.json()), "red"))
+        print(colored("\t\tNew relic request failed: " + str(response.json()), "red"))
 
     return response_data
 

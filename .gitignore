@@ -131,3 +131,5 @@ dmypy.json
 .idea
 live_input
 /input
+/csv_out
+/json_out

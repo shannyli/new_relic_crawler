@@ -127,7 +127,6 @@ def parse_temp_data_files(temp_json_files, output_file_path, report_write_time):
             query_data = entry.get("query_data")
             query_name = entry.get("query_name")
             response = query_data.get("response")
-            print(response)
 
             # If a header exists, save it in a row on its own with an empty row above it
             if header:

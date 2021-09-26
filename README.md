@@ -80,7 +80,7 @@ As it stands now, the new relic parser can only parse three types of responses, 
 ]
 ```
 
-###Sample Output File
+### Sample Output File
 To give an idea of what the csv files look like, and how headers and sub headers are populated, take a look at the following
 
 ![Sample CSV](documentation_graphics/sample_output.png)

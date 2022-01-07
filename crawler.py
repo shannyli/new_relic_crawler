@@ -154,7 +154,7 @@ def parse_temp_data_files(temp_json_files, output_file_path, report_write_time):
                 if second_response.get("facet") == "True":
                     true_value = second_response.get("count")
 
-                percentage = false_value / (false_value + true_value)
+                percentage = false_value / (false_value + true_value) * 100
                 short_percentage = float("{:.3f}".format(percentage))
 
                 # Store sub header and false percent to a row, be sure to empty tmp
